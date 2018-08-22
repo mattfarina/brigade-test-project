@@ -1,5 +1,4 @@
 const { events, Job } = require("brigadier");
-const octokit = require("@octokit/rest")();
 
 events.on("pull_request", async function(e, project) {
 
@@ -7,50 +6,60 @@ events.on("pull_request", async function(e, project) {
     const ghData = JSON.parse(e.payload);
 
     // Notify GH that 
-    var foo = new Notification("dco", e, project);
-    foo.text = "Checking for DCO";
-    await foo.run();
+    var ghn = new Notification("dco", e, project);
+    ghn.text = "Checking for DCO";
+    await ghn.run();
 
-    // Get the commits to check. The pull_request event does not provide these
-    // but we can query for them.
-    // Authenticating for higher rate limit count.
-    octokit.authenticate({
-        type: 'token',
-        token: project.secrets.ghToken
-    });
-
-    // Iterate over each commit to make sure the message has the DCO
-    // This is not meant to replace probots DCO check but rather apply a label
-    // When the DCO appears to be there. This should compliment probot as this
-    // is looser but is meant to allow us to use k8s prow automation.?
-    // TODO: rewrite this as a job?
-    const re = /^Signed-off-by: (.*) <(.*)>$/im
-    var parts = project.repo.name.split("/");
-    const results = await octokit.pullRequests.getCommits({
-        owner: parts[0],
-        repo: parts[1],
-        number: ghData.number,
-        per_page: 100
-    });
-
-    for (result in results) {
-        console.log(result.commit.message);
-    }
-
-
-    foo.text = "wee";
-    foo.state = "success";
-    await foo.run();
-
-    // Test adding a label
-    var j = new Job(`just-a-test`, "mattfarina/github-label-adder:latest");
-    j.env = {
+    // Get the commits to iterate over
+    var cj = new Job(`github-pr-commits`, "mattfarina/github-pr-commits:latest");
+    cj.env = {
         GITHUB_REPO: project.repo.name,
-        GITHUB_ISSUE_LABEL: "invalid",
         GITHUB_TOKEN: project.secrets.ghToken,
-        GITHUB_ISSUE_NUMBER: ghData.number.toString(),
+        GITHUB_PR_NUMBER: ghData.number.toString(),
     }
-    await j.run();
+    res = await cj.run();
+    var tempJson = JSON.stringify(res.toString());
+    tempJson = tempJson.replace(/\\n/g, "\\n")
+                .replace(/\\'/g, "\\'")
+                .replace(/\\"/g, '\\"')
+                .replace(/\\&/g, "\\&")
+                .replace(/\\r/g, "\\r")
+                .replace(/\\t/g, "\\t")
+                .replace(/\\b/g, "\\b")
+                .replace(/\\f/g, "\\f");
+    const commits = JSON.parse(tempJson);
+    const re = /^Signed-off-by: (.*) <(.*)>$/im
+
+    var count = 0, missed = 0;
+
+    for (const {commit} of commits) {
+        var signedOff = re.exec(commit.message);
+
+        if (signedOff == null){
+            missed++;
+        }
+        count++
+    }
+
+    // A notification that some were missed
+    if (missed > 0) {
+        ghn.text = missed + " out of " + count + " commits are missing signoff";
+        ghn.state = "failure";
+    } else {
+        ghn.text = "All commits have signoff";
+        ghn.state = "success";
+
+        // Add the label so the bot knows it can merge
+        var j = new Job(`github-label-adder`, "mattfarina/github-label-adder:0.1.0");
+        j.env = {
+            GITHUB_REPO: project.repo.name,
+            GITHUB_ISSUE_LABEL: "Contribution Allowed",
+            GITHUB_TOKEN: project.secrets.ghToken,
+            GITHUB_ISSUE_NUMBER: ghData.number.toString(),
+        }
+        j.run();
+    }
+    ghn.run();
 })
 
 class Notification {
