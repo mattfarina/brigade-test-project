@@ -6,3 +6,5 @@ package wrongname
 func Hello() string {
 	return "World"
 }
+
+// A comment to test master merges
