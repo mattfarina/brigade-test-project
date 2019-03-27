@@ -5,7 +5,7 @@ import "testing"
 func TestHello(t *testing.T) {
 	f := Hello()
 
-	if f != "World" {
+	if f != "Woorld" {
 		t.Error("Dis be cray cray")
 	}
 }
